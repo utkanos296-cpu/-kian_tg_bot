@@ -1,5 +1,6 @@
 import os
 import json
+import time
 from pathlib import Path
 
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
@@ -15,13 +16,11 @@ BOT_TOKEN = os.environ["BOT_TOKEN"].strip()
 ADMIN_ID = 8903515053
 
 DATA_FILE = Path("bot_data.json")
-
-# Максимум попыток написать повторно, пока Mister Kian не ответил
-MAX_SPAM_ATTEMPTS = 5
+MAX_SPAM_MESSAGES = 5
 
 
 # =========================
-# ХРАНЕНИЕ ДАННЫХ
+# DATA
 # =========================
 
 def load_data():
@@ -47,24 +46,43 @@ def save_data():
 
 
 def get_user(user_id):
-    user_id = str(user_id)
+    uid = str(user_id)
 
-    if user_id not in data["users"]:
-        data["users"][user_id] = {
+    if uid not in data["users"]:
+        data["users"][uid] = {
             "language": None,
             "age": None,
             "stage": "language",
             "waiting": False,
             "spam_count": 0,
-            "blocked": False,
+            "spam_strikes": 0,
+            "blocked_until": 0,
+            "permanent_block": False,
         }
+
         save_data()
 
-    return data["users"][user_id]
+    # Добавляем новые поля старым пользователям
+    defaults = {
+        "language": None,
+        "age": None,
+        "stage": "language",
+        "waiting": False,
+        "spam_count": 0,
+        "spam_strikes": 0,
+        "blocked_until": 0,
+        "permanent_block": False,
+    }
+
+    for key, value in defaults.items():
+        if key not in data["users"][uid]:
+            data["users"][uid][key] = value
+
+    return data["users"][uid]
 
 
 # =========================
-# ЯЗЫКИ
+# LANGUAGES
 # =========================
 
 LANGUAGE_BUTTONS = {
@@ -77,19 +95,19 @@ LANGUAGE_BUTTONS = {
 
 
 TEXTS = {
+
+    # 🇷🇺 RUSSIAN
     "ru": {
         "assistant":
             "👋 Hello! Я виртуальный помощник Kian.\n\n"
             "Но перед тем как продолжить, подтвердите свой возраст.\n\n"
-            "🔞 Напишите свой возраст цифрами от 17 до 65.",
+            "🔞 Напишите свой возраст цифрами.",
 
         "bad_age":
-            "Извините, этот возраст не подходит.\n\n"
-            "Продолжить могут пользователи в возрасте от 17 до 65 лет.",
+            "Ваш возраст не подходит 😂😂😂",
 
         "age_number":
-            "Пожалуйста, укажите возраст только цифрами.\n"
-            "Например: 21",
+            "Пожалуйста, напишите свой возраст только цифрами 👀",
 
         "question":
             "Отлично 👀\n\n"
@@ -104,35 +122,47 @@ TEXTS = {
 
         "spam":
             "⚠️ Ваше сообщение уже передано.\n\n"
-            "Пожалуйста, не отправляйте сообщения по частям. "
-            "Напишите один полный вопрос и дождитесь ответа Mister Kian.",
+            "Пишите только по делу и одним сообщением. "
+            "Не нужно спамить — дождитесь ответа Mister Kian 👀",
 
-        "blocked":
-            "⛔ Вы отправили слишком много сообщений подряд.\n\n"
-            "Доступ к отправке новых сообщений временно заблокирован.",
+        "block_1h":
+            "⛔ Слишком много сообщений подряд.\n\n"
+            "Возможность писать боту ограничена на 1 час.",
+
+        "block_3h":
+            "⛔ Вы снова отправили слишком много сообщений подряд.\n\n"
+            "В этот раз возможность писать боту ограничена на 3 часа.",
+
+        "block_forever":
+            "⛔ Доступ заблокирован.\n\n"
+            "Вы неоднократно нарушили ограничение на отправку сообщений.",
+
+        "still_blocked":
+            "⏳ Возможность отправлять сообщения временно ограничена.\n\n"
+            "Попробуйте позже.",
 
         "after_answer":
             "💬 Mister Kian ответил на ваше сообщение.\n\n"
             "Если у вас появился новый вопрос, можете написать его одним сообщением.",
     },
 
+
+    # 🇬🇧 ENGLISH
     "en": {
         "assistant":
             "👋 Hello! I'm Kian's virtual assistant.\n\n"
             "Before we continue, please confirm your age.\n\n"
-            "🔞 Enter your age using numbers from 17 to 65.",
+            "🔞 Enter your age using numbers.",
 
         "bad_age":
-            "Sorry, this age is not accepted.\n\n"
-            "Only users between 17 and 65 can continue.",
+            "Your age is not suitable 😂😂😂",
 
         "age_number":
-            "Please enter your age using numbers only.\n"
-            "For example: 21",
+            "Please enter your age using numbers only 👀",
 
         "question":
             "Great 👀\n\n"
-            "What would you like to know, and what question would you like to ask Mister Kian?\n\n"
+            "What are you interested in and what would you like to ask Mister Kian?\n\n"
             "Please write everything in one message.",
 
         "sent":
@@ -143,31 +173,43 @@ TEXTS = {
 
         "spam":
             "⚠️ Your message has already been delivered.\n\n"
-            "Please don't send your question in multiple messages. "
-            "Send one complete message and wait for Mister Kian's reply.",
+            "Please keep it to the point and send everything in one message. "
+            "Don't spam — wait for Mister Kian's reply 👀",
 
-        "blocked":
-            "⛔ You have sent too many messages in a row.\n\n"
-            "Sending new messages has been temporarily blocked.",
+        "block_1h":
+            "⛔ Too many messages were sent in a row.\n\n"
+            "Messaging has been restricted for 1 hour.",
+
+        "block_3h":
+            "⛔ You have again sent too many messages in a row.\n\n"
+            "This time messaging has been restricted for 3 hours.",
+
+        "block_forever":
+            "⛔ Access has been blocked.\n\n"
+            "You repeatedly violated the messaging limit.",
+
+        "still_blocked":
+            "⏳ Messaging is temporarily restricted.\n\n"
+            "Please try again later.",
 
         "after_answer":
             "💬 Mister Kian has replied to your message.\n\n"
             "If you have another question, you can send it in one message.",
     },
 
+
+    # 🇩🇪 GERMAN
     "de": {
         "assistant":
             "👋 Hallo! Ich bin der virtuelle Assistent von Kian.\n\n"
             "Bevor wir fortfahren, bestätige bitte dein Alter.\n\n"
-            "🔞 Schreibe dein Alter als Zahl zwischen 17 und 65.",
+            "🔞 Schreibe dein Alter in Zahlen.",
 
         "bad_age":
-            "Entschuldigung, dieses Alter ist nicht zulässig.\n\n"
-            "Fortfahren können Nutzer zwischen 17 und 65 Jahren.",
+            "Dein Alter passt leider nicht 😂😂😂",
 
         "age_number":
-            "Bitte gib dein Alter nur als Zahl ein.\n"
-            "Zum Beispiel: 21",
+            "Bitte gib dein Alter nur in Zahlen ein 👀",
 
         "question":
             "Perfekt 👀\n\n"
@@ -182,31 +224,43 @@ TEXTS = {
 
         "spam":
             "⚠️ Deine Nachricht wurde bereits weitergeleitet.\n\n"
-            "Bitte sende deine Frage nicht in mehreren einzelnen Nachrichten. "
-            "Schreibe eine vollständige Nachricht und warte auf die Antwort von Mister Kian.",
+            "Bitte schreibe nur das Wesentliche und alles in einer Nachricht. "
+            "Kein Spam — warte auf die Antwort von Mister Kian 👀",
 
-        "blocked":
-            "⛔ Du hast zu viele Nachrichten hintereinander gesendet.\n\n"
-            "Das Senden neuer Nachrichten wurde vorübergehend gesperrt.",
+        "block_1h":
+            "⛔ Zu viele Nachrichten hintereinander.\n\n"
+            "Das Senden von Nachrichten wurde für 1 Stunde eingeschränkt.",
+
+        "block_3h":
+            "⛔ Du hast erneut zu viele Nachrichten hintereinander gesendet.\n\n"
+            "Diesmal wurde das Senden für 3 Stunden eingeschränkt.",
+
+        "block_forever":
+            "⛔ Der Zugriff wurde gesperrt.\n\n"
+            "Du hast wiederholt gegen das Nachrichtenlimit verstoßen.",
+
+        "still_blocked":
+            "⏳ Das Senden von Nachrichten ist vorübergehend eingeschränkt.\n\n"
+            "Versuche es später erneut.",
 
         "after_answer":
             "💬 Mister Kian hat auf deine Nachricht geantwortet.\n\n"
             "Wenn du eine neue Frage hast, kannst du sie in einer Nachricht senden.",
     },
 
+
+    # 🇧🇾 BELARUSIAN
     "be": {
         "assistant":
             "👋 Прывітанне! Я віртуальны памочнік Kian.\n\n"
             "Перш чым працягнуць, пацвердзіце свой узрост.\n\n"
-            "🔞 Напішыце свой узрост лічбамі ад 17 да 65.",
+            "🔞 Напішыце свой узрост лічбамі.",
 
         "bad_age":
-            "Прабачце, гэты ўзрост не падыходзіць.\n\n"
-            "Працягнуць могуць карыстальнікі ва ўзросце ад 17 да 65 гадоў.",
+            "Ваш узрост не падыходзіць 😂😂😂",
 
         "age_number":
-            "Калі ласка, укажыце ўзрост толькі лічбамі.\n"
-            "Напрыклад: 21",
+            "Калі ласка, напішыце свой узрост толькі лічбамі 👀",
 
         "question":
             "Выдатна 👀\n\n"
@@ -221,31 +275,43 @@ TEXTS = {
 
         "spam":
             "⚠️ Ваша паведамленне ўжо перададзена.\n\n"
-            "Калі ласка, не адпраўляйце паведамленні па частках. "
-            "Напішыце адно поўнае пытанне і дачакайцеся адказу Mister Kian.",
+            "Пішыце толькі па справе і адным паведамленнем. "
+            "Не трэба спаміць — дачакайцеся адказу Mister Kian 👀",
 
-        "blocked":
-            "⛔ Вы адправілі занадта шмат паведамленняў запар.\n\n"
-            "Адпраўка новых паведамленняў часова заблакіравана.",
+        "block_1h":
+            "⛔ Занадта шмат паведамленняў запар.\n\n"
+            "Магчымасць пісаць боту абмежавана на 1 гадзіну.",
+
+        "block_3h":
+            "⛔ Вы зноў адправілі занадта шмат паведамленняў запар.\n\n"
+            "На гэты раз магчымасць пісаць боту абмежавана на 3 гадзіны.",
+
+        "block_forever":
+            "⛔ Доступ заблакіраваны.\n\n"
+            "Вы неаднаразова парушылі абмежаванне на адпраўку паведамленняў.",
+
+        "still_blocked":
+            "⏳ Магчымасць адпраўляць паведамленні часова абмежавана.\n\n"
+            "Паспрабуйце пазней.",
 
         "after_answer":
             "💬 Mister Kian адказаў на ваша паведамленне.\n\n"
             "Калі ў вас ёсць новае пытанне, можаце напісаць яго адным паведамленнем.",
     },
 
+
+    # 🇺🇦 UKRAINIAN
     "uk": {
         "assistant":
             "👋 Привіт! Я віртуальний помічник Kian.\n\n"
             "Перш ніж продовжити, підтвердьте свій вік.\n\n"
-            "🔞 Напишіть свій вік цифрами від 17 до 65.",
+            "🔞 Напишіть свій вік цифрами.",
 
         "bad_age":
-            "Вибачте, цей вік не підходить.\n\n"
-            "Продовжити можуть користувачі віком від 17 до 65 років.",
+            "Ваш вік не підходить 😂😂😂",
 
         "age_number":
-            "Будь ласка, вкажіть вік лише цифрами.\n"
-            "Наприклад: 21",
+            "Будь ласка, напишіть свій вік лише цифрами 👀",
 
         "question":
             "Чудово 👀\n\n"
@@ -260,18 +326,59 @@ TEXTS = {
 
         "spam":
             "⚠️ Ваше повідомлення вже передано.\n\n"
-            "Будь ласка, не надсилайте повідомлення частинами. "
-            "Напишіть одне повне питання та дочекайтеся відповіді Mister Kian.",
+            "Пишіть лише по суті та одним повідомленням. "
+            "Не потрібно спамити — дочекайтеся відповіді Mister Kian 👀",
 
-        "blocked":
-            "⛔ Ви надіслали забагато повідомлень поспіль.\n\n"
-            "Надсилання нових повідомлень тимчасово заблоковано.",
+        "block_1h":
+            "⛔ Забагато повідомлень поспіль.\n\n"
+            "Можливість писати боту обмежена на 1 годину.",
+
+        "block_3h":
+            "⛔ Ви знову надіслали забагато повідомлень поспіль.\n\n"
+            "Цього разу можливість писати боту обмежена на 3 години.",
+
+        "block_forever":
+            "⛔ Доступ заблоковано.\n\n"
+            "Ви неодноразово порушили обмеження на надсилання повідомлень.",
+
+        "still_blocked":
+            "⏳ Можливість надсилати повідомлення тимчасово обмежена.\n\n"
+            "Спробуйте пізніше.",
 
         "after_answer":
             "💬 Mister Kian відповів на ваше повідомлення.\n\n"
             "Якщо у вас з'явилося нове питання, можете написати його одним повідомленням.",
     },
 }
+
+
+# =========================
+# BLOCK CHECK
+# =========================
+
+async def check_block(update, user_data):
+    language = user_data.get("language") or "ru"
+    t = TEXTS[language]
+
+    if user_data["permanent_block"]:
+        await update.message.reply_text(t["block_forever"])
+        return True
+
+    blocked_until = user_data.get("blocked_until", 0)
+
+    if blocked_until > time.time():
+        await update.message.reply_text(t["still_blocked"])
+        return True
+
+    # Временная блокировка закончилась
+    if blocked_until != 0:
+        user_data["blocked_until"] = 0
+        user_data["spam_count"] = 0
+        user_data["waiting"] = False
+        user_data["stage"] = "question"
+        save_data()
+
+    return False
 
 
 # =========================
@@ -287,13 +394,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # При /start начинаем процесс заново,
-    # но блокировку не снимаем.
     user_data = get_user(user.id)
 
-    if user_data["blocked"]:
-        language = user_data["language"] or "ru"
-        await update.message.reply_text(TEXTS[language]["blocked"])
+    if await check_block(update, user_data):
         return
 
     user_data["stage"] = "language"
@@ -301,6 +404,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data["age"] = None
     user_data["waiting"] = False
     user_data["spam_count"] = 0
+
+    # ВАЖНО: spam_strikes здесь НЕ обнуляем
     save_data()
 
     keyboard = ReplyKeyboardMarkup(
@@ -320,7 +425,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================
-# ПОЛЬЗОВАТЕЛЬ
+# USER
 # =========================
 
 async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -328,17 +433,15 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     user_data = get_user(user.id)
 
-    if user_data["blocked"]:
-        language = user_data["language"] or "ru"
-        await message.reply_text(TEXTS[language]["blocked"])
+    if await check_block(update, user_data):
         return
 
-    # ВЫБОР ЯЗЫКА
+    # LANGUAGE
     if user_data["stage"] == "language":
 
         if message.text not in LANGUAGE_BUTTONS:
             await message.reply_text(
-                "🌐 Пожалуйста, выберите язык с помощью кнопки."
+                "🌐 Please choose your language using the buttons."
             )
             return
 
@@ -357,7 +460,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     language = user_data["language"] or "ru"
     t = TEXTS[language]
 
-    # ВОЗРАСТ
+    # AGE
     if user_data["stage"] == "age":
 
         try:
@@ -366,6 +469,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await message.reply_text(t["age_number"])
             return
 
+        # Диапазон скрыт от пользователя
         if age < 17 or age > 65:
             await message.reply_text(t["bad_age"])
             return
@@ -377,39 +481,69 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_text(t["question"])
         return
 
-    # ЗАЩИТА ОТ СПАМА
+    # SPAM WHILE WAITING
     if user_data["waiting"]:
 
         user_data["spam_count"] += 1
+        save_data()
 
-        if user_data["spam_count"] >= MAX_SPAM_ATTEMPTS:
-            user_data["blocked"] = True
+        if user_data["spam_count"] < MAX_SPAM_MESSAGES:
+            await message.reply_text(t["spam"])
+            return
+
+        # Поймали очередное нарушение
+        user_data["spam_strikes"] += 1
+        user_data["spam_count"] = 0
+
+        strike = user_data["spam_strikes"]
+
+        # 1 нарушение = 1 час
+        if strike == 1:
+            user_data["blocked_until"] = time.time() + (60 * 60)
             save_data()
 
-            await message.reply_text(t["blocked"])
+            await message.reply_text(t["block_1h"])
 
             await context.bot.send_message(
-                chat_id=ADMIN_ID,
-                text=(
-                    "🚫 Пользователь автоматически заблокирован за спам.\n\n"
-                    f"👤 {user.full_name}\n"
-                    f"🔗 @{user.username if user.username else 'нет username'}\n"
-                    f"🆔 {user.id}"
-                )
+                ADMIN_ID,
+                f"⚠️ Антиспам: блокировка на 1 час\n\n"
+                f"👤 {user.full_name}\n"
+                f"🆔 {user.id}"
             )
             return
 
+        # 2 нарушение = 3 часа
+        if strike == 2:
+            user_data["blocked_until"] = time.time() + (3 * 60 * 60)
+            save_data()
+
+            await message.reply_text(t["block_3h"])
+
+            await context.bot.send_message(
+                ADMIN_ID,
+                f"⚠️ Антиспам: блокировка на 3 часа\n\n"
+                f"👤 {user.full_name}\n"
+                f"🆔 {user.id}"
+            )
+            return
+
+        # 3 нарушение = навсегда
+        user_data["permanent_block"] = True
+        user_data["blocked_until"] = 0
         save_data()
 
-        attempts_left = MAX_SPAM_ATTEMPTS - user_data["spam_count"]
+        await message.reply_text(t["block_forever"])
 
-        await message.reply_text(
-            t["spam"] +
-            f"\n\n⚠️ {user_data['spam_count']}/{MAX_SPAM_ATTEMPTS}"
+        await context.bot.send_message(
+            ADMIN_ID,
+            f"🚫 ПОЛНАЯ БЛОКИРОВКА ЗА СПАМ\n\n"
+            f"👤 {user.full_name}\n"
+            f"🔗 @{user.username if user.username else 'нет username'}\n"
+            f"🆔 {user.id}"
         )
         return
 
-    # ВОПРОС
+    # QUESTION
     if user_data["stage"] == "question":
 
         username = f"@{user.username}" if user.username else "нет username"
@@ -447,7 +581,6 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         user_data["waiting"] = True
         user_data["spam_count"] = 0
-
         save_data()
 
         await message.reply_text(t["sent"])
@@ -455,7 +588,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================
-# ОТВЕТ MISTER KIAN
+# ADMIN REPLY
 # =========================
 
 async def handle_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -471,7 +604,7 @@ async def handle_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user_id:
         await message.reply_text(
             "⚠️ Не удалось определить пользователя.\n\n"
-            "Используй Reply именно на сообщение пользователя."
+            "Используй Reply именно на его сообщение."
         )
         return
 
@@ -484,11 +617,9 @@ async def handle_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
             message_id=message.message_id
         )
 
-        # После ответа Mister Kian пользователь снова может написать
         user_data["waiting"] = False
         user_data["spam_count"] = 0
         user_data["stage"] = "question"
-
         save_data()
 
         language = user_data["language"] or "ru"
@@ -507,7 +638,7 @@ async def handle_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================
-# ЗАПУСК
+# RUN
 # =========================
 
 def main():
