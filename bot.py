@@ -4,7 +4,12 @@ import time
 from pathlib import Path
 from html import escape
 
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import (
+    Update,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+    Bot,
+)
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -13,16 +18,19 @@ from telegram.ext import (
     filters,
 )
 
+
 # =========================================================
 # SETTINGS
 # =========================================================
 
 BOT_TOKEN = os.environ["BOT_TOKEN"].strip()
+SECOND_BOT_TOKEN = os.environ.get("SECOND_BOT_TOKEN", "").strip()
+
 ADMIN_ID = 8903515053
 
 DATA_FILE = Path("bot_data.json")
 
-# 5 лишних сообщений = одно нарушение
+# 5 лишних сообщений = нарушение
 MAX_SPAM_MESSAGES = 5
 
 
@@ -104,18 +112,9 @@ def get_user(user_id):
 # =========================================================
 
 async def react_to_message(message, emoji):
-    """
-    Ставит Telegram-реакцию на сообщение пользователя.
-
-    ❤ = нормальное сообщение
-    😡 = спам
-    """
-
     try:
         await message.set_reaction(emoji)
     except Exception:
-        # Если Telegram не разрешил реакцию,
-        # бот продолжит работать.
         pass
 
 
@@ -448,37 +447,25 @@ async def check_block(update, user_data):
     language = user_data.get("language") or "ru"
     t = TEXTS[language]
 
-    # Постоянный бан
     if user_data["permanent_block"]:
-        await update.message.reply_text(
-            t["block_forever"]
-        )
+        await update.message.reply_text(t["block_forever"])
         return True
 
     blocked_until = user_data.get("blocked_until", 0)
 
-    # Временный бан ещё действует
     if blocked_until > time.time():
-
-        remaining = int(
-            blocked_until - time.time()
-        )
-
-        minutes = max(
-            1,
-            (remaining + 59) // 60
-        )
+        remaining = int(blocked_until - time.time())
+        minutes = max(1, (remaining + 59) // 60)
 
         await update.message.reply_text(
-            t["still_blocked"]
-            + f"\n\n⏱ {minutes} min."
+            t["still_blocked"] +
+            f"\n\n⏱ {minutes} min."
         )
 
         return True
 
     # Временный бан закончился
     if blocked_until:
-
         user_data["blocked_until"] = 0
         user_data["spam_count"] = 0
         user_data["waiting"] = False
@@ -495,7 +482,6 @@ async def check_block(update, user_data):
 
 def get_target_user_id(update, context):
 
-    # Например:
     # /block 123456789
     if context.args:
         try:
@@ -503,7 +489,7 @@ def get_target_user_id(update, context):
         except ValueError:
             return None
 
-    # Команда через Reply
+    # Reply -> /block, /status, /unblock
     if update.message.reply_to_message:
 
         replied_id = str(
@@ -521,7 +507,7 @@ def get_target_user_id(update, context):
 
 
 # =========================================================
-# SET REPLY PHOTO
+# SET PHOTO
 # =========================================================
 
 async def setphoto(
@@ -539,13 +525,12 @@ async def setphoto(
         await update.message.reply_text(
             "📸 Сначала отправь нужную фотографию боту.\n\n"
             "Потом зажми фотографию → Ответить / Reply → "
-            "отправь команду:\n\n"
+            "отправь:\n\n"
             "/setphoto"
         )
 
         return
 
-    # Берём фотографию максимального качества
     file_id = replied.photo[-1].file_id
 
     data["reply_photo_id"] = file_id
@@ -555,12 +540,12 @@ async def setphoto(
     await update.message.reply_text(
         "✅ Фото Mister Kian установлено.\n\n"
         "Теперь просто отвечай пользователю текстом через Reply — "
-        "бот сам отправит это фото вместе с твоим ответом 😎"
+        "бот сам добавит фотографию 😎"
     )
 
 
 # =========================================================
-# REMOVE REPLY PHOTO
+# REMOVE PHOTO
 # =========================================================
 
 async def removephoto(
@@ -616,10 +601,7 @@ async def unblock(
     user_data["spam_strikes"] = 0
     user_data["waiting"] = False
 
-    if (
-        user_data.get("language")
-        and user_data.get("age")
-    ):
+    if user_data.get("language") and user_data.get("age"):
         user_data["stage"] = "question"
 
     elif user_data.get("language"):
@@ -638,10 +620,7 @@ async def unblock(
 
     try:
 
-        language = (
-            user_data.get("language")
-            or "ru"
-        )
+        language = user_data.get("language") or "ru"
 
         notices = {
             "ru":
@@ -748,18 +727,12 @@ async def status(
 
     if user_data["permanent_block"]:
 
-        block_status = (
-            "🚫 Постоянно заблокирован"
-        )
+        block_status = "🚫 Постоянно заблокирован"
 
-    elif (
-        user_data["blocked_until"]
-        > time.time()
-    ):
+    elif user_data["blocked_until"] > time.time():
 
         remaining = int(
-            user_data["blocked_until"]
-            - time.time()
+            user_data["blocked_until"] - time.time()
         )
 
         minutes = max(
@@ -768,15 +741,12 @@ async def status(
         )
 
         block_status = (
-            f"⏳ Временная блокировка — "
-            f"ещё ~{minutes} мин."
+            f"⏳ Временная блокировка — ещё ~{minutes} мин."
         )
 
     else:
 
-        block_status = (
-            "✅ Не заблокирован"
-        )
+        block_status = "✅ Не заблокирован"
 
     language_name = LANGUAGE_NAMES.get(
         user_data["language"],
@@ -787,14 +757,69 @@ async def status(
         "👤 Информация о пользователе\n\n"
         f"🆔 ID: {user_id}\n"
         f"🌐 Язык: {language_name}\n"
-        f"🔞 Возраст: "
-        f"{user_data['age'] or 'не указан'}\n"
+        f"🔞 Возраст: {user_data['age'] or 'не указан'}\n"
         f"📨 Ждёт ответа: "
         f"{'Да' if user_data['waiting'] else 'Нет'}\n"
-        f"⚠️ Нарушений: "
-        f"{user_data['spam_strikes']}/3\n"
+        f"⚠️ Нарушений: {user_data['spam_strikes']}/3\n"
         f"🔒 Статус: {block_status}"
     )
+
+
+# =========================================================
+# TEST SECOND BOT
+# =========================================================
+
+async def testsecond(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    # Только администратор
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    # Проверяем, добавлена ли переменная
+    if not SECOND_BOT_TOKEN:
+
+        await update.message.reply_text(
+            "❌ SECOND_BOT_TOKEN не найден.\n\n"
+            "Добавь токен второго бота в:\n"
+            "Railway → Variables → SECOND_BOT_TOKEN"
+        )
+
+        return
+
+    try:
+
+        # Создаём подключение ко второму боту
+        second_bot = Bot(
+            token=SECOND_BOT_TOKEN
+        )
+
+        # Получаем только информацию о самом боте
+        bot_info = await second_bot.get_me()
+
+        username = (
+            f"@{bot_info.username}"
+            if bot_info.username
+            else "нет username"
+        )
+
+        await update.message.reply_text(
+            "🧪 Проверка второго бота\n\n"
+            "✅ Токен работает!\n\n"
+            f"🤖 Имя: {bot_info.full_name}\n"
+            f"🔗 Username: {username}\n"
+            f"🆔 Bot ID: {bot_info.id}\n\n"
+            "🔐 Соединение с Telegram Bot API успешно."
+        )
+
+    except Exception as e:
+
+        await update.message.reply_text(
+            "❌ Не удалось подключиться ко второму боту.\n\n"
+            f"Ошибка:\n{e}"
+        )
 
 
 # =========================================================
@@ -808,7 +833,10 @@ async def start(
 
     user = update.effective_user
 
-    # Администратор
+    # =====================================================
+    # ADMIN START
+    # =====================================================
+
     if user.id == ADMIN_ID:
 
         photo_status = (
@@ -817,20 +845,38 @@ async def start(
             else "❌ не установлено"
         )
 
+        second_status = (
+            "✅ токен добавлен"
+            if SECOND_BOT_TOKEN
+            else "❌ токен не добавлен"
+        )
+
         await update.message.reply_text(
             "👤 Mister Kian — режим администратора активен.\n\n"
-            f"🖼 Фото ответа: {photo_status}\n\n"
+
+            f"🖼 Фото ответа: {photo_status}\n"
+            f"🤖 Второй бот: {second_status}\n\n"
+
             "Команды:\n\n"
+
             "📸 /setphoto — установить фото\n"
-            "🗑 /removephoto — удалить фото\n"
+            "🗑 /removephoto — удалить фото\n\n"
+
+            "🧪 /testsecond — проверить второго бота\n\n"
+
             "ℹ️ /status ID — статус пользователя\n"
             "🚫 /block ID — заблокировать\n"
             "🔓 /unblock ID — разблокировать\n\n"
+
             "Также /status, /block и /unblock "
             "работают через Reply."
         )
 
         return
+
+    # =====================================================
+    # NORMAL USER START
+    # =====================================================
 
     user_data = get_user(user.id)
 
@@ -840,14 +886,13 @@ async def start(
     ):
         return
 
-    # Начинаем сначала
     user_data["stage"] = "language"
     user_data["language"] = None
     user_data["age"] = None
     user_data["waiting"] = False
     user_data["spam_count"] = 0
 
-    # spam_strikes НЕ сбрасываем
+    # Нарушения специально НЕ сбрасываем
     save_data()
 
     keyboard = ReplyKeyboardMarkup(
@@ -890,7 +935,10 @@ async def handle_user(
         user.id
     )
 
-    # Проверяем блокировку
+    # =====================================================
+    # BLOCK CHECK
+    # =====================================================
+
     if await check_block(
         update,
         user_data
@@ -905,13 +953,11 @@ async def handle_user(
 
         if (
             not message.text
-            or message.text
-            not in LANGUAGE_BUTTONS
+            or message.text not in LANGUAGE_BUTTONS
         ):
 
             await message.reply_text(
-                "🌐 Please choose your language "
-                "using the buttons."
+                "🌐 Please choose your language using the buttons."
             )
 
             return
@@ -920,7 +966,7 @@ async def handle_user(
             message.text
         ]
 
-        # ❤️ Реакция на выбранный язык
+        # ❤️ Язык выбран
         await react_to_message(
             message,
             "❤"
@@ -968,10 +1014,7 @@ async def handle_user(
 
             return
 
-        # -----------------------------------------
-        # МЛАДШЕ 17
-        # -----------------------------------------
-
+        # Младше 17
         if age < 17:
 
             await message.reply_text(
@@ -980,10 +1023,7 @@ async def handle_user(
 
             return
 
-        # -----------------------------------------
-        # СТАРШЕ 65
-        # -----------------------------------------
-
+        # Старше 65
         if age > 65:
 
             await message.reply_text(
@@ -992,11 +1032,7 @@ async def handle_user(
 
             return
 
-        # -----------------------------------------
-        # ВОЗРАСТ ПРИНЯТ
-        # -----------------------------------------
-
-        # ❤️
+        # ❤️ Возраст принят
         await react_to_message(
             message,
             "❤"
@@ -1007,17 +1043,13 @@ async def handle_user(
 
         save_data()
 
-        # -----------------------------------------
-        # 17–25 ЛЕТ
-        # -----------------------------------------
-
+        # 17–25
         if 17 <= age <= 25:
 
             await message.reply_text(
                 t["young_welcome"]
             )
 
-        # После этого спрашиваем вопрос
         await message.reply_text(
             t["question"]
         )
@@ -1030,7 +1062,7 @@ async def handle_user(
 
     if user_data["waiting"]:
 
-        # 😡 Реакция на КАЖДОЕ лишнее сообщение
+        # 😡 На каждое лишнее сообщение
         await react_to_message(
             message,
             "😡"
@@ -1040,10 +1072,7 @@ async def handle_user(
 
         save_data()
 
-        # -----------------------------------------
-        # Первые 4 сообщения
-        # -----------------------------------------
-
+        # Первые четыре лишних сообщения
         if (
             user_data["spam_count"]
             < MAX_SPAM_MESSAGES
@@ -1052,17 +1081,13 @@ async def handle_user(
             await message.reply_text(
                 t["spam"]
                 + "\n\n"
-                + f"⚠️ "
-                f"{user_data['spam_count']}"
-                f"/{MAX_SPAM_MESSAGES}"
+                + f"⚠️ {user_data['spam_count']}"
+                + f"/{MAX_SPAM_MESSAGES}"
             )
 
             return
 
-        # -----------------------------------------
-        # Пятое сообщение = нарушение
-        # -----------------------------------------
-
+        # Пятое = нарушение
         user_data["spam_strikes"] += 1
         user_data["spam_count"] = 0
 
@@ -1070,9 +1095,9 @@ async def handle_user(
             "spam_strikes"
         ]
 
-        # -----------------------------------------
+        # =================================================
         # STRIKE 1 = 1 HOUR
-        # -----------------------------------------
+        # =================================================
 
         if strike == 1:
 
@@ -1089,22 +1114,21 @@ async def handle_user(
             await context.bot.send_message(
                 chat_id=ADMIN_ID,
                 text=(
-                    "⚠️ Антиспам — "
-                    "блокировка на 1 час\n\n"
+                    "⚠️ Антиспам — блокировка на 1 час\n\n"
                     f"👤 {user.full_name}\n"
                     f"🔗 "
                     f"@{user.username if user.username else 'нет username'}\n"
                     f"🆔 {user.id}\n\n"
-                    f"⚠️ Нарушение: 1/3\n\n"
+                    "⚠️ Нарушение: 1/3\n\n"
                     f"🔓 /unblock {user.id}"
                 )
             )
 
             return
 
-        # -----------------------------------------
+        # =================================================
         # STRIKE 2 = 3 HOURS
-        # -----------------------------------------
+        # =================================================
 
         if strike == 2:
 
@@ -1121,22 +1145,21 @@ async def handle_user(
             await context.bot.send_message(
                 chat_id=ADMIN_ID,
                 text=(
-                    "⚠️ Антиспам — "
-                    "блокировка на 3 часа\n\n"
+                    "⚠️ Антиспам — блокировка на 3 часа\n\n"
                     f"👤 {user.full_name}\n"
                     f"🔗 "
                     f"@{user.username if user.username else 'нет username'}\n"
                     f"🆔 {user.id}\n\n"
-                    f"⚠️ Нарушение: 2/3\n\n"
+                    "⚠️ Нарушение: 2/3\n\n"
                     f"🔓 /unblock {user.id}"
                 )
             )
 
             return
 
-        # -----------------------------------------
+        # =================================================
         # STRIKE 3 = PERMANENT
-        # -----------------------------------------
+        # =================================================
 
         user_data["permanent_block"] = True
         user_data["blocked_until"] = 0
@@ -1155,8 +1178,8 @@ async def handle_user(
                 f"🔗 "
                 f"@{user.username if user.username else 'нет username'}\n"
                 f"🆔 {user.id}\n\n"
-                f"⚠️ Нарушение: 3/3\n\n"
-                f"🔓 Для снятия бана:\n"
+                "⚠️ Нарушение: 3/3\n\n"
+                "🔓 Для снятия бана:\n"
                 f"/unblock {user.id}"
             )
         )
@@ -1169,7 +1192,7 @@ async def handle_user(
 
     if user_data["stage"] == "question":
 
-        # ❤️ Вопрос принят
+        # ❤️ Нормальный вопрос
         await react_to_message(
             message,
             "❤"
@@ -1197,7 +1220,6 @@ async def handle_user(
             f"{user_data['spam_strikes']}/3"
         )
 
-        # Информация для администратора
         info_message = (
             await context.bot.send_message(
                 chat_id=ADMIN_ID,
@@ -1205,7 +1227,6 @@ async def handle_user(
             )
         )
 
-        # Копируем само сообщение пользователя
         copied_message = (
             await context.bot.copy_message(
                 chat_id=ADMIN_ID,
@@ -1214,7 +1235,6 @@ async def handle_user(
             )
         )
 
-        # Запоминаем владельца обоих сообщений
         data["message_owners"][
             str(info_message.message_id)
         ] = user.id
@@ -1223,7 +1243,6 @@ async def handle_user(
             str(copied_message.message_id)
         ] = user.id
 
-        # Пользователь теперь ждёт ответа
         user_data["waiting"] = True
         user_data["spam_count"] = 0
 
@@ -1247,7 +1266,6 @@ async def handle_admin(
 
     message = update.message
 
-    # Администратор должен ответить через Reply
     if not message.reply_to_message:
         return
 
@@ -1279,14 +1297,12 @@ async def handle_admin(
         )
 
         # =================================================
-        # TEXT ANSWER + PHOTO
+        # TEXT + MISTER KIAN PHOTO
         # =================================================
 
         if photo_id and message.text:
 
-            # Telegram ограничивает caption,
-            # поэтому длинный текст отправляем отдельно.
-
+            # Caption Telegram ограничен 1024 символами
             if len(message.text) <= 1024:
 
                 await context.bot.send_photo(
@@ -1308,12 +1324,11 @@ async def handle_admin(
                 )
 
         # =================================================
-        # OTHER TYPES OF ANSWERS
+        # OTHER MESSAGE
         # =================================================
 
         else:
 
-            # Если админ отправил фото/видео/голосовое и т.д.
             if photo_id and not message.text:
 
                 await context.bot.send_photo(
@@ -1327,7 +1342,7 @@ async def handle_admin(
                 message_id=message.message_id
             )
 
-        # Пользователь снова может задать новый вопрос
+        # Пользователь может снова задать вопрос
         user_data["waiting"] = False
         user_data["spam_count"] = 0
         user_data["stage"] = "question"
@@ -1340,7 +1355,7 @@ async def handle_admin(
         )
 
         # =================================================
-        # SPOILER MESSAGE
+        # SPOILER
         # =================================================
 
         spoiler_text = escape(
@@ -1401,6 +1416,14 @@ def main():
         CommandHandler(
             "removephoto",
             removephoto
+        )
+    )
+
+    # SECOND BOT TEST
+    app.add_handler(
+        CommandHandler(
+            "testsecond",
+            testsecond
         )
     )
 
