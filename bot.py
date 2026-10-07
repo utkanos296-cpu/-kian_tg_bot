@@ -2,13 +2,9 @@ import os
 import json
 import time
 from pathlib import Path
+from html import escape
 
-from telegram import (
-    Update,
-    ReplyKeyboardMarkup,
-    ReplyKeyboardRemove,
-)
-from telegram.constants import ParseMode
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -16,7 +12,6 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-
 
 BOT_TOKEN = os.environ["BOT_TOKEN"].strip()
 ADMIN_ID = 8903515053
@@ -30,30 +25,26 @@ MAX_SPAM_MESSAGES = 5
 # =========================================================
 
 def load_data():
+    default = {
+        "users": {},
+        "message_owners": {},
+        "reply_photo_id": None,
+    }
+
     if DATA_FILE.exists():
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f:
                 loaded = json.load(f)
 
-                if "users" not in loaded:
-                    loaded["users"] = {}
+            for key, value in default.items():
+                if key not in loaded:
+                    loaded[key] = value
 
-                if "message_owners" not in loaded:
-                    loaded["message_owners"] = {}
-
-                if "settings" not in loaded:
-                    loaded["settings"] = {}
-
-                return loaded
-
+            return loaded
         except Exception:
             pass
 
-    return {
-        "users": {},
-        "message_owners": {},
-        "settings": {},
-    }
+    return default
 
 
 data = load_data()
@@ -61,12 +52,7 @@ data = load_data()
 
 def save_data():
     with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(
-            data,
-            f,
-            ensure_ascii=False,
-            indent=2
-        )
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 
 def get_user(user_id):
@@ -115,11 +101,7 @@ LANGUAGE_BUTTONS = {
 
 
 TEXTS = {
-
-    # ================= RUSSIAN =================
-
     "ru": {
-
         "assistant":
             "👋 Hello! Я виртуальный помощник Kian.\n\n"
             "Но перед тем как продолжить, подтвердите свой возраст.\n\n"
@@ -168,11 +150,7 @@ TEXTS = {
             "Если у вас появился новый вопрос, можете написать его одним сообщением.",
     },
 
-
-    # ================= ENGLISH =================
-
     "en": {
-
         "assistant":
             "👋 Hello! I'm Kian's virtual assistant.\n\n"
             "Before we continue, please confirm your age.\n\n"
@@ -221,11 +199,7 @@ TEXTS = {
             "If you have another question, you can send it in one message.",
     },
 
-
-    # ================= GERMAN =================
-
     "de": {
-
         "assistant":
             "👋 Hallo! Ich bin der virtuelle Assistent von Kian.\n\n"
             "Bevor wir fortfahren, bestätige bitte dein Alter.\n\n"
@@ -274,11 +248,7 @@ TEXTS = {
             "Wenn du eine neue Frage hast, kannst du sie in einer Nachricht senden.",
     },
 
-
-    # ================= BELARUSIAN =================
-
     "be": {
-
         "assistant":
             "👋 Прывітанне! Я віртуальны памочнік Kian.\n\n"
             "Перш чым працягнуць, пацвердзіце свой узрост.\n\n"
@@ -327,11 +297,7 @@ TEXTS = {
             "Калі ў вас ёсць новае пытанне, можаце напісаць яго адным паведамленнем.",
     },
 
-
-    # ================= UKRAINIAN =================
-
     "uk": {
-
         "assistant":
             "👋 Привіт! Я віртуальний помічник Kian.\n\n"
             "Перш ніж продовжити, підтвердьте свій вік.\n\n"
@@ -387,71 +353,48 @@ TEXTS = {
 # =========================================================
 
 async def check_block(update, user_data):
-
     language = user_data.get("language") or "ru"
     t = TEXTS[language]
 
     if user_data["permanent_block"]:
-        await update.message.reply_text(
-            t["block_forever"]
-        )
+        await update.message.reply_text(t["block_forever"])
         return True
 
     blocked_until = user_data.get("blocked_until", 0)
 
     if blocked_until > time.time():
-
-        remaining = int(
-            blocked_until - time.time()
-        )
-
-        minutes = max(
-            1,
-            (remaining + 59) // 60
-        )
+        remaining = int(blocked_until - time.time())
+        minutes = max(1, (remaining + 59) // 60)
 
         await update.message.reply_text(
-            t["still_blocked"] +
-            f"\n\n⏱ {minutes} min."
+            t["still_blocked"] + f"\n\n⏱ {minutes} min."
         )
-
         return True
 
     if blocked_until:
-
         user_data["blocked_until"] = 0
         user_data["spam_count"] = 0
         user_data["waiting"] = False
         user_data["stage"] = "question"
-
         save_data()
 
     return False
 
 
 # =========================================================
-# TARGET USER
+# ADMIN TARGET
 # =========================================================
 
 def get_target_user_id(update, context):
-
     if context.args:
-
         try:
             return int(context.args[0])
-
         except ValueError:
             return None
 
     if update.message.reply_to_message:
-
-        replied_id = str(
-            update.message.reply_to_message.message_id
-        )
-
-        target = data["message_owners"].get(
-            replied_id
-        )
+        replied_id = str(update.message.reply_to_message.message_id)
+        target = data["message_owners"].get(replied_id)
 
         if target:
             return int(target)
@@ -464,83 +407,36 @@ def get_target_user_id(update, context):
 # =========================================================
 
 async def setphoto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     if update.effective_user.id != ADMIN_ID:
         return
 
-    # Вариант 1:
-    # Reply командой /setphoto на фотографию
+    replied = update.message.reply_to_message
 
-    if (
-        update.message.reply_to_message
-        and update.message.reply_to_message.photo
-    ):
-
-        photo = update.message.reply_to_message.photo[-1]
-
-        data["settings"]["reply_photo"] = photo.file_id
-
-        save_data()
-
+    if not replied or not replied.photo:
         await update.message.reply_text(
-            "✅ Фото Mister Kian сохранено.\n\n"
-            "Теперь оно будет автоматически прикрепляться "
-            "к твоим ответам пользователям."
+            "⚠️ Сначала отправь фотографию боту.\n\n"
+            "Потом сделай Reply на фотографию и отправь:\n"
+            "/setphoto"
         )
-
         return
+
+    file_id = replied.photo[-1].file_id
+
+    data["reply_photo_id"] = file_id
+    save_data()
 
     await update.message.reply_text(
-        "🖼 Чтобы установить фотографию:\n\n"
-        "1. Отправь мне фотографию.\n"
-        "2. Сделай Reply на эту фотографию.\n"
-        "3. Напиши /setphoto"
+        "✅ Фото Mister Kian установлено.\n\n"
+        "Теперь при обычном текстовом ответе пользователю "
+        "бот автоматически прикрепит эту фотографию."
     )
-
-
-async def photo_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    if update.effective_user.id != ADMIN_ID:
-        return
-
-    photo_id = data["settings"].get(
-        "reply_photo"
-    )
-
-    if not photo_id:
-
-        await update.message.reply_text(
-            "❌ Фото для ответов пока не установлено.\n\n"
-            "Отправь фотографию → Reply → /setphoto"
-        )
-
-        return
-
-    try:
-
-        await context.bot.send_photo(
-            chat_id=ADMIN_ID,
-            photo=photo_id,
-            caption="✅ Сейчас используется эта фотография."
-        )
-
-    except Exception:
-
-        await update.message.reply_text(
-            "⚠️ Фото сохранено, но Telegram не смог его отправить."
-        )
 
 
 async def removephoto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     if update.effective_user.id != ADMIN_ID:
         return
 
-    data["settings"].pop(
-        "reply_photo",
-        None
-    )
-
+    data["reply_photo_id"] = None
     save_data()
 
     await update.message.reply_text(
@@ -549,28 +445,21 @@ async def removephoto(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================================================
-# ADMIN BLOCK COMMANDS
+# ADMIN COMMANDS
 # =========================================================
 
 async def unblock(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     if update.effective_user.id != ADMIN_ID:
         return
 
-    user_id = get_target_user_id(
-        update,
-        context
-    )
+    user_id = get_target_user_id(update, context)
 
     if not user_id:
-
         await update.message.reply_text(
-            "🔓 Разблокировка пользователя\n\n"
-            "Ответь командой /unblock на сообщение пользователя\n\n"
-            "или используй:\n"
+            "🔓 Ответь командой /unblock на сообщение пользователя\n\n"
+            "или:\n"
             "/unblock TELEGRAM_ID"
         )
-
         return
 
     user_data = get_user(user_id)
@@ -581,19 +470,11 @@ async def unblock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data["spam_strikes"] = 0
     user_data["waiting"] = False
 
-    if (
-        user_data.get("language")
-        and user_data.get("age")
-    ):
-
+    if user_data.get("language") and user_data.get("age"):
         user_data["stage"] = "question"
-
     elif user_data.get("language"):
-
         user_data["stage"] = "age"
-
     else:
-
         user_data["stage"] = "language"
 
     save_data()
@@ -601,67 +482,40 @@ async def unblock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"🔓 Пользователь разблокирован.\n\n"
         f"🆔 {user_id}\n"
-        "Все ограничения и нарушения сброшены."
+        "Все нарушения сброшены."
     )
 
     try:
-
-        language = (
-            user_data.get("language")
-            or "ru"
-        )
+        language = user_data.get("language") or "ru"
 
         notices = {
-
-            "ru":
-                "🔓 Ограничение снято. "
-                "Вы снова можете пользоваться ботом.",
-
-            "en":
-                "🔓 The restriction has been removed. "
-                "You can use the bot again.",
-
-            "de":
-                "🔓 Die Einschränkung wurde aufgehoben. "
-                "Du kannst den Bot wieder verwenden.",
-
-            "be":
-                "🔓 Абмежаванне знята. "
-                "Вы зноў можаце карыстацца ботам.",
-
-            "uk":
-                "🔓 Обмеження знято. "
-                "Ви знову можете користуватися ботом.",
+            "ru": "🔓 Ограничение снято. Вы снова можете пользоваться ботом.",
+            "en": "🔓 The restriction has been removed. You can use the bot again.",
+            "de": "🔓 Die Einschränkung wurde aufgehoben. Du kannst den Bot wieder verwenden.",
+            "be": "🔓 Абмежаванне знята. Вы зноў можаце карыстацца ботам.",
+            "uk": "🔓 Обмеження знято. Ви знову можете користуватися ботом.",
         }
 
         await context.bot.send_message(
             chat_id=user_id,
             text=notices[language]
         )
-
     except Exception:
         pass
 
 
 async def block(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     if update.effective_user.id != ADMIN_ID:
         return
 
-    user_id = get_target_user_id(
-        update,
-        context
-    )
+    user_id = get_target_user_id(update, context)
 
     if not user_id:
-
         await update.message.reply_text(
-            "🚫 Блокировка пользователя\n\n"
-            "Ответь командой /block на сообщение пользователя\n\n"
-            "или используй:\n"
+            "🚫 Ответь командой /block на сообщение пользователя\n\n"
+            "или:\n"
             "/block TELEGRAM_ID"
         )
-
         return
 
     user_data = get_user(user_id)
@@ -673,62 +527,36 @@ async def block(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_data()
 
     await update.message.reply_text(
-        f"🚫 Пользователь заблокирован.\n\n"
-        f"🆔 {user_id}"
+        f"🚫 Пользователь заблокирован.\n\n🆔 {user_id}"
     )
 
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     if update.effective_user.id != ADMIN_ID:
         return
 
-    user_id = get_target_user_id(
-        update,
-        context
-    )
+    user_id = get_target_user_id(update, context)
 
     if not user_id:
-
         await update.message.reply_text(
-            "ℹ️ Проверка пользователя\n\n"
-            "Ответь командой /status на его сообщение\n\n"
-            "или используй:\n"
+            "ℹ️ Ответь командой /status на сообщение пользователя\n\n"
+            "или:\n"
             "/status TELEGRAM_ID"
         )
-
         return
 
     user_data = get_user(user_id)
 
     if user_data["permanent_block"]:
-
-        block_status = (
-            "🚫 Постоянно заблокирован"
-        )
+        block_status = "🚫 Постоянно заблокирован"
 
     elif user_data["blocked_until"] > time.time():
-
-        remaining = int(
-            user_data["blocked_until"]
-            - time.time()
-        )
-
-        minutes = max(
-            1,
-            (remaining + 59) // 60
-        )
-
-        block_status = (
-            f"⏳ Временная блокировка — "
-            f"ещё ~{minutes} мин."
-        )
+        remaining = int(user_data["blocked_until"] - time.time())
+        minutes = max(1, (remaining + 59) // 60)
+        block_status = f"⏳ Блокировка — ещё ~{minutes} мин."
 
     else:
-
-        block_status = (
-            "✅ Не заблокирован"
-        )
+        block_status = "✅ Не заблокирован"
 
     language_names = {
         "ru": "🇷🇺 Русский",
@@ -742,14 +570,10 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👤 Информация о пользователе\n\n"
         f"🆔 ID: {user_id}\n"
-        f"🌐 Язык: "
-        f"{language_names.get(user_data['language'], 'Неизвестно')}\n"
-        f"🔞 Возраст: "
-        f"{user_data['age'] or 'не указан'}\n"
-        f"📨 Ждёт ответа: "
-        f"{'Да' if user_data['waiting'] else 'Нет'}\n"
-        f"⚠️ Нарушений: "
-        f"{user_data['spam_strikes']}/3\n"
+        f"🌐 Язык: {language_names.get(user_data['language'], 'Неизвестно')}\n"
+        f"🔞 Возраст: {user_data['age'] or 'не указан'}\n"
+        f"📨 Ждёт ответа: {'Да' if user_data['waiting'] else 'Нет'}\n"
+        f"⚠️ Нарушений: {user_data['spam_strikes']}/3\n"
         f"🔒 Статус: {block_status}"
     )
 
@@ -759,38 +583,30 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     user = update.effective_user
 
     if user.id == ADMIN_ID:
+        photo_status = (
+            "✅ установлено"
+            if data.get("reply_photo_id")
+            else "❌ не установлено"
+        )
 
         await update.message.reply_text(
             "👤 Mister Kian — режим администратора активен.\n\n"
-
-            "👥 Пользователи:\n"
-            "/status ID — статус\n"
+            f"🖼 Фото ответа: {photo_status}\n\n"
+            "Команды:\n"
+            "/setphoto — установить фото через Reply\n"
+            "/removephoto — удалить фото\n"
+            "/status ID — статус пользователя\n"
             "/block ID — заблокировать\n"
-            "/unblock ID — разблокировать\n\n"
-
-            "🖼 Фото ответов:\n"
-            "/setphoto — установить фото\n"
-            "/photo — показать текущее фото\n"
-            "/removephoto — удалить фото\n\n"
-
-            "💬 Чтобы ответить пользователю — "
-            "просто сделай Reply на его сообщение."
+            "/unblock ID — разблокировать"
         )
-
         return
 
-    user_data = get_user(
-        user.id
-    )
+    user_data = get_user(user.id)
 
-    if await check_block(
-        update,
-        user_data
-    ):
+    if await check_block(update, user_data):
         return
 
     user_data["stage"] = "language"
@@ -803,17 +619,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = ReplyKeyboardMarkup(
         [
-            [
-                "🇷🇺 Русский",
-                "🇬🇧 English"
-            ],
-            [
-                "🇩🇪 Deutsch",
-                "🇧🇾 Беларуская"
-            ],
-            [
-                "🇺🇦 Українська"
-            ],
+            ["🇷🇺 Русский", "🇬🇧 English"],
+            ["🇩🇪 Deutsch", "🇧🇾 Беларуская"],
+            ["🇺🇦 Українська"],
         ],
         resize_keyboard=True,
         one_time_keyboard=True,
@@ -826,222 +634,137 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================================================
-# USER
+# USER MESSAGES
 # =========================================================
 
-async def handle_user(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
+async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     message = update.message
+    user_data = get_user(user.id)
 
-    user_data = get_user(
-        user.id
-    )
-
-    if await check_block(
-        update,
-        user_data
-    ):
+    if await check_block(update, user_data):
         return
 
-    # ================= LANGUAGE =================
-
+    # LANGUAGE
     if user_data["stage"] == "language":
 
-        if message.text not in LANGUAGE_BUTTONS:
-
+        if not message.text or message.text not in LANGUAGE_BUTTONS:
             await message.reply_text(
                 "🌐 Please choose your language using the buttons."
             )
-
             return
 
-        language = LANGUAGE_BUTTONS[
-            message.text
-        ]
+        language = LANGUAGE_BUTTONS[message.text]
 
         user_data["language"] = language
         user_data["stage"] = "age"
-
         save_data()
 
         await message.reply_text(
             TEXTS[language]["assistant"],
             reply_markup=ReplyKeyboardRemove()
         )
-
         return
 
-    language = (
-        user_data["language"]
-        or "ru"
-    )
-
+    language = user_data["language"] or "ru"
     t = TEXTS[language]
 
-    # ================= AGE =================
-
+    # AGE
     if user_data["stage"] == "age":
 
         try:
-
-            age = int(
-                message.text.strip()
-            )
-
-        except (
-            ValueError,
-            AttributeError
-        ):
-
-            await message.reply_text(
-                t["age_number"]
-            )
-
+            age = int(message.text.strip())
+        except (ValueError, AttributeError):
+            await message.reply_text(t["age_number"])
             return
 
         if age < 17 or age > 65:
-
-            await message.reply_text(
-                t["bad_age"]
-            )
-
+            await message.reply_text(t["bad_age"])
             return
 
         user_data["age"] = age
         user_data["stage"] = "question"
-
         save_data()
 
-        await message.reply_text(
-            t["question"]
-        )
-
+        await message.reply_text(t["question"])
         return
 
-    # ================= SPAM =================
-
+    # SPAM
     if user_data["waiting"]:
 
         user_data["spam_count"] += 1
-
         save_data()
 
-        if (
-            user_data["spam_count"]
-            < MAX_SPAM_MESSAGES
-        ):
-
+        if user_data["spam_count"] < MAX_SPAM_MESSAGES:
             await message.reply_text(
                 t["spam"] +
-                f"\n\n⚠️ "
-                f"{user_data['spam_count']}"
-                f"/{MAX_SPAM_MESSAGES}"
+                f"\n\n⚠️ {user_data['spam_count']}/{MAX_SPAM_MESSAGES}"
             )
-
             return
 
         user_data["spam_strikes"] += 1
         user_data["spam_count"] = 0
 
-        strike = user_data[
-            "spam_strikes"
-        ]
-
-        # FIRST STRIKE
+        strike = user_data["spam_strikes"]
 
         if strike == 1:
-
-            user_data["blocked_until"] = (
-                time.time() + 3600
-            )
-
+            user_data["blocked_until"] = time.time() + 3600
             save_data()
 
-            await message.reply_text(
-                t["block_1h"]
-            )
+            await message.reply_text(t["block_1h"])
 
             await context.bot.send_message(
                 chat_id=ADMIN_ID,
                 text=(
                     "⚠️ Антиспам — блокировка на 1 час\n\n"
                     f"👤 {user.full_name}\n"
-                    f"🔗 "
-                    f"@{user.username if user.username else 'нет username'}\n"
+                    f"🔗 @{user.username if user.username else 'нет username'}\n"
                     f"🆔 {user.id}\n\n"
                     f"🔓 /unblock {user.id}"
                 )
             )
-
             return
 
-        # SECOND STRIKE
-
         if strike == 2:
-
-            user_data["blocked_until"] = (
-                time.time() + 10800
-            )
-
+            user_data["blocked_until"] = time.time() + 10800
             save_data()
 
-            await message.reply_text(
-                t["block_3h"]
-            )
+            await message.reply_text(t["block_3h"])
 
             await context.bot.send_message(
                 chat_id=ADMIN_ID,
                 text=(
                     "⚠️ Антиспам — блокировка на 3 часа\n\n"
                     f"👤 {user.full_name}\n"
-                    f"🔗 "
-                    f"@{user.username if user.username else 'нет username'}\n"
+                    f"🔗 @{user.username if user.username else 'нет username'}\n"
                     f"🆔 {user.id}\n\n"
                     f"🔓 /unblock {user.id}"
                 )
             )
-
             return
-
-        # THIRD STRIKE
 
         user_data["permanent_block"] = True
         user_data["blocked_until"] = 0
-
         save_data()
 
-        await message.reply_text(
-            t["block_forever"]
-        )
+        await message.reply_text(t["block_forever"])
 
         await context.bot.send_message(
             chat_id=ADMIN_ID,
             text=(
                 "🚫 ПОЛНАЯ БЛОКИРОВКА ЗА СПАМ\n\n"
                 f"👤 {user.full_name}\n"
-                f"🔗 "
-                f"@{user.username if user.username else 'нет username'}\n"
+                f"🔗 @{user.username if user.username else 'нет username'}\n"
                 f"🆔 {user.id}\n\n"
-                f"🔓 Для снятия бана:\n"
-                f"/unblock {user.id}"
+                f"🔓 /unblock {user.id}"
             )
         )
-
         return
 
-    # ================= QUESTION =================
-
+    # NEW QUESTION
     if user_data["stage"] == "question":
 
-        username = (
-            f"@{user.username}"
-            if user.username
-            else "нет username"
-        )
+        username = f"@{user.username}" if user.username else "нет username"
 
         language_names = {
             "ru": "🇷🇺 Русский",
@@ -1058,42 +781,29 @@ async def handle_user(
             f"🆔 {user.id}\n"
             f"🔞 Возраст: {user_data['age']}\n"
             f"🌐 Язык: {language_names[language]}\n\n"
-            f"⚠️ Нарушений: "
-            f"{user_data['spam_strikes']}/3"
+            f"⚠️ Нарушений: {user_data['spam_strikes']}/3"
         )
 
-        info_message = (
-            await context.bot.send_message(
-                chat_id=ADMIN_ID,
-                text=header
-            )
+        info_message = await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=header
         )
 
-        copied_message = (
-            await context.bot.copy_message(
-                chat_id=ADMIN_ID,
-                from_chat_id=message.chat_id,
-                message_id=message.message_id
-            )
+        copied_message = await context.bot.copy_message(
+            chat_id=ADMIN_ID,
+            from_chat_id=message.chat_id,
+            message_id=message.message_id
         )
 
-        data["message_owners"][
-            str(info_message.message_id)
-        ] = user.id
-
-        data["message_owners"][
-            str(copied_message.message_id)
-        ] = user.id
+        data["message_owners"][str(info_message.message_id)] = user.id
+        data["message_owners"][str(copied_message.message_id)] = user.id
 
         user_data["waiting"] = True
         user_data["spam_count"] = 0
 
         save_data()
 
-        await message.reply_text(
-            t["sent"]
-        )
-
+        await message.reply_text(t["sent"])
         return
 
 
@@ -1101,102 +811,45 @@ async def handle_user(
 # ADMIN REPLY
 # =========================================================
 
-async def handle_admin(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
+async def handle_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
-
-    # Обычная фотография администратора
-    # без Reply здесь ничего не делает.
 
     if not message.reply_to_message:
         return
 
-    replied_id = str(
-        message.reply_to_message.message_id
-    )
+    replied_id = str(message.reply_to_message.message_id)
 
-    user_id = data[
-        "message_owners"
-    ].get(replied_id)
+    user_id = data["message_owners"].get(replied_id)
 
     if not user_id:
-
         await message.reply_text(
             "⚠️ Не удалось определить пользователя.\n\n"
             "Используй Reply именно на сообщение пользователя."
         )
-
         return
 
-    user_data = get_user(
-        user_id
-    )
+    user_data = get_user(user_id)
 
     try:
+        photo_id = data.get("reply_photo_id")
 
-        reply_photo = (
-            data["settings"].get(
-                "reply_photo"
+        # Если админ отвечает обычным текстом и фото установлено:
+        # отправляем фото + ответ в подписи.
+        if photo_id and message.text:
+
+            await context.bot.send_photo(
+                chat_id=user_id,
+                photo=photo_id,
+                caption=message.text
             )
-        )
-
-        # ==========================================
-        # ЕСЛИ АДМИН ОТВЕТИЛ ТЕКСТОМ
-        # ==========================================
-
-        if message.text:
-
-            # Есть установленное фото
-            if reply_photo:
-
-                # Telegram caption имеет ограничение,
-                # поэтому длинные ответы отправляем отдельно.
-
-                if len(message.text) <= 1024:
-
-                    await context.bot.send_photo(
-                        chat_id=user_id,
-                        photo=reply_photo,
-                        caption=message.text
-                    )
-
-                else:
-
-                    await context.bot.send_photo(
-                        chat_id=user_id,
-                        photo=reply_photo
-                    )
-
-                    await context.bot.send_message(
-                        chat_id=user_id,
-                        text=message.text
-                    )
-
-            # Фото ещё не установлено
-            else:
-
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text=message.text
-                )
-
-        # ==========================================
-        # ЕСЛИ АДМИН ОТВЕТИЛ НЕ ТЕКСТОМ
-        # ==========================================
 
         else:
-
+            # Фото, видео, голосовые и т.д. просто копируются
             await context.bot.copy_message(
                 chat_id=user_id,
                 from_chat_id=message.chat_id,
                 message_id=message.message_id
             )
-
-        # Пользователь теперь может задать
-        # новый вопрос
 
         user_data["waiting"] = False
         user_data["spam_count"] = 0
@@ -1204,35 +857,20 @@ async def handle_admin(
 
         save_data()
 
-        language = (
-            user_data["language"]
-            or "ru"
-        )
+        language = user_data["language"] or "ru"
 
-        # ==========================================
-        # SPOILER
-        # ==========================================
-
-        spoiler_text = (
-            TEXTS[language]["after_answer"]
-        )
+        # Скрываем служебное сообщение под Telegram spoiler
+        spoiler_text = escape(TEXTS[language]["after_answer"])
 
         await context.bot.send_message(
             chat_id=user_id,
-            text=(
-                f"<tg-spoiler>"
-                f"{spoiler_text}"
-                f"</tg-spoiler>"
-            ),
-            parse_mode=ParseMode.HTML
+            text=f"<tg-spoiler>{spoiler_text}</tg-spoiler>",
+            parse_mode="HTML"
         )
 
-        await message.reply_text(
-            "✅ Ответ отправлен."
-        )
+        await message.reply_text("✅ Ответ отправлен.")
 
     except Exception as e:
-
         await message.reply_text(
             f"❌ Не удалось отправить ответ: {e}"
         )
@@ -1243,95 +881,36 @@ async def handle_admin(
 # =========================================================
 
 def main():
+    app = Application.builder().token(BOT_TOKEN).build()
 
-    app = (
-        Application
-        .builder()
-        .token(BOT_TOKEN)
-        .build()
-    )
+    app.add_handler(CommandHandler("start", start))
 
-    app.add_handler(
-        CommandHandler(
-            "start",
-            start
-        )
-    )
+    # Фото Mister Kian
+    app.add_handler(CommandHandler("setphoto", setphoto))
+    app.add_handler(CommandHandler("removephoto", removephoto))
 
-    # ADMIN COMMANDS
+    # Админ-команды
+    app.add_handler(CommandHandler("unblock", unblock))
+    app.add_handler(CommandHandler("block", block))
+    app.add_handler(CommandHandler("status", status))
 
-    app.add_handler(
-        CommandHandler(
-            "unblock",
-            unblock
-        )
-    )
-
-    app.add_handler(
-        CommandHandler(
-            "block",
-            block
-        )
-    )
-
-    app.add_handler(
-        CommandHandler(
-            "status",
-            status
-        )
-    )
-
-    # PHOTO COMMANDS
-
-    app.add_handler(
-        CommandHandler(
-            "setphoto",
-            setphoto
-        )
-    )
-
-    app.add_handler(
-        CommandHandler(
-            "photo",
-            photo_status
-        )
-    )
-
-    app.add_handler(
-        CommandHandler(
-            "removephoto",
-            removephoto
-        )
-    )
-
-    # ADMIN REPLIES
-
+    # Ответ администратора
     app.add_handler(
         MessageHandler(
-            filters.User(
-                user_id=ADMIN_ID
-            )
-            & ~filters.COMMAND,
+            filters.User(user_id=ADMIN_ID) & ~filters.COMMAND,
             handle_admin
         )
     )
 
-    # USER MESSAGES
-
+    # Сообщения пользователей
     app.add_handler(
         MessageHandler(
-            ~filters.User(
-                user_id=ADMIN_ID
-            )
-            & ~filters.COMMAND,
+            ~filters.User(user_id=ADMIN_ID) & ~filters.COMMAND,
             handle_user
         )
     )
 
-    print(
-        "Kian Assistant started..."
-    )
-
+    print("Kian Assistant started...")
     app.run_polling()
 
 
