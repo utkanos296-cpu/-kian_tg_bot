@@ -27,7 +27,16 @@ def load_data():
     if DATA_FILE.exists():
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                loaded = json.load(f)
+
+                if "users" not in loaded:
+                    loaded["users"] = {}
+
+                if "message_owners" not in loaded:
+                    loaded["message_owners"] = {}
+
+                return loaded
+
         except Exception:
             pass
 
@@ -48,21 +57,6 @@ def save_data():
 def get_user(user_id):
     uid = str(user_id)
 
-    if uid not in data["users"]:
-        data["users"][uid] = {
-            "language": None,
-            "age": None,
-            "stage": "language",
-            "waiting": False,
-            "spam_count": 0,
-            "spam_strikes": 0,
-            "blocked_until": 0,
-            "permanent_block": False,
-        }
-
-        save_data()
-
-    # Добавляем новые поля старым пользователям
     defaults = {
         "language": None,
         "age": None,
@@ -74,9 +68,20 @@ def get_user(user_id):
         "permanent_block": False,
     }
 
-    for key, value in defaults.items():
-        if key not in data["users"][uid]:
-            data["users"][uid][key] = value
+    if uid not in data["users"]:
+        data["users"][uid] = defaults.copy()
+        save_data()
+
+    else:
+        changed = False
+
+        for key, value in defaults.items():
+            if key not in data["users"][uid]:
+                data["users"][uid][key] = value
+                changed = True
+
+        if changed:
+            save_data()
 
     return data["users"][uid]
 
@@ -96,7 +101,6 @@ LANGUAGE_BUTTONS = {
 
 TEXTS = {
 
-    # 🇷🇺 RUSSIAN
     "ru": {
         "assistant":
             "👋 Hello! Я виртуальный помощник Kian.\n\n"
@@ -146,8 +150,6 @@ TEXTS = {
             "Если у вас появился новый вопрос, можете написать его одним сообщением.",
     },
 
-
-    # 🇬🇧 ENGLISH
     "en": {
         "assistant":
             "👋 Hello! I'm Kian's virtual assistant.\n\n"
@@ -197,8 +199,6 @@ TEXTS = {
             "If you have another question, you can send it in one message.",
     },
 
-
-    # 🇩🇪 GERMAN
     "de": {
         "assistant":
             "👋 Hallo! Ich bin der virtuelle Assistent von Kian.\n\n"
@@ -248,8 +248,6 @@ TEXTS = {
             "Wenn du eine neue Frage hast, kannst du sie in einer Nachricht senden.",
     },
 
-
-    # 🇧🇾 BELARUSIAN
     "be": {
         "assistant":
             "👋 Прывітанне! Я віртуальны памочнік Kian.\n\n"
@@ -299,8 +297,6 @@ TEXTS = {
             "Калі ў вас ёсць новае пытанне, можаце напісаць яго адным паведамленнем.",
     },
 
-
-    # 🇺🇦 UKRAINIAN
     "uk": {
         "assistant":
             "👋 Привіт! Я віртуальний помічник Kian.\n\n"
@@ -367,11 +363,17 @@ async def check_block(update, user_data):
     blocked_until = user_data.get("blocked_until", 0)
 
     if blocked_until > time.time():
-        await update.message.reply_text(t["still_blocked"])
+        remaining = int(blocked_until - time.time())
+        minutes = max(1, (remaining + 59) // 60)
+
+        await update.message.reply_text(
+            t["still_blocked"] +
+            f"\n\n⏱ {minutes} min."
+        )
         return True
 
-    # Временная блокировка закончилась
-    if blocked_until != 0:
+    # Временный бан закончился
+    if blocked_until:
         user_data["blocked_until"] = 0
         user_data["spam_count"] = 0
         user_data["waiting"] = False
@@ -379,6 +381,167 @@ async def check_block(update, user_data):
         save_data()
 
     return False
+
+
+# =========================
+# ADMIN COMMANDS
+# =========================
+
+def get_target_user_id(update, context):
+    # /command 123456789
+    if context.args:
+        try:
+            return int(context.args[0])
+        except ValueError:
+            return None
+
+    # Reply → /command
+    if update.message.reply_to_message:
+        replied_id = str(update.message.reply_to_message.message_id)
+
+        target = data["message_owners"].get(replied_id)
+
+        if target:
+            return int(target)
+
+    return None
+
+
+async def unblock(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    user_id = get_target_user_id(update, context)
+
+    if not user_id:
+        await update.message.reply_text(
+            "🔓 Разблокировка пользователя\n\n"
+            "Ответь командой /unblock на сообщение пользователя\n\n"
+            "или используй:\n"
+            "/unblock TELEGRAM_ID"
+        )
+        return
+
+    user_data = get_user(user_id)
+
+    user_data["permanent_block"] = False
+    user_data["blocked_until"] = 0
+    user_data["spam_count"] = 0
+    user_data["spam_strikes"] = 0
+    user_data["waiting"] = False
+
+    # Если человек уже прошёл возраст
+    if user_data.get("language") and user_data.get("age"):
+        user_data["stage"] = "question"
+    elif user_data.get("language"):
+        user_data["stage"] = "age"
+    else:
+        user_data["stage"] = "language"
+
+    save_data()
+
+    await update.message.reply_text(
+        f"🔓 Пользователь разблокирован.\n\n"
+        f"🆔 {user_id}\n"
+        "Все ограничения и нарушения сброшены."
+    )
+
+    # Сообщаем пользователю
+    try:
+        language = user_data.get("language") or "ru"
+
+        notices = {
+            "ru": "🔓 Ограничение снято. Вы снова можете пользоваться ботом.",
+            "en": "🔓 The restriction has been removed. You can use the bot again.",
+            "de": "🔓 Die Einschränkung wurde aufgehoben. Du kannst den Bot wieder verwenden.",
+            "be": "🔓 Абмежаванне знята. Вы зноў можаце карыстацца ботам.",
+            "uk": "🔓 Обмеження знято. Ви знову можете користуватися ботом.",
+        }
+
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=notices[language]
+        )
+
+    except Exception:
+        pass
+
+
+async def block(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    user_id = get_target_user_id(update, context)
+
+    if not user_id:
+        await update.message.reply_text(
+            "🚫 Блокировка пользователя\n\n"
+            "Ответь командой /block на сообщение пользователя\n\n"
+            "или используй:\n"
+            "/block TELEGRAM_ID"
+        )
+        return
+
+    user_data = get_user(user_id)
+
+    user_data["permanent_block"] = True
+    user_data["blocked_until"] = 0
+    user_data["waiting"] = False
+
+    save_data()
+
+    await update.message.reply_text(
+        f"🚫 Пользователь заблокирован.\n\n"
+        f"🆔 {user_id}"
+    )
+
+
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    user_id = get_target_user_id(update, context)
+
+    if not user_id:
+        await update.message.reply_text(
+            "ℹ️ Проверка пользователя\n\n"
+            "Ответь командой /status на его сообщение\n\n"
+            "или используй:\n"
+            "/status TELEGRAM_ID"
+        )
+        return
+
+    user_data = get_user(user_id)
+
+    if user_data["permanent_block"]:
+        block_status = "🚫 Постоянно заблокирован"
+
+    elif user_data["blocked_until"] > time.time():
+        remaining = int(user_data["blocked_until"] - time.time())
+        minutes = max(1, (remaining + 59) // 60)
+        block_status = f"⏳ Временная блокировка — ещё ~{minutes} мин."
+
+    else:
+        block_status = "✅ Не заблокирован"
+
+    language_names = {
+        "ru": "🇷🇺 Русский",
+        "en": "🇬🇧 English",
+        "de": "🇩🇪 Deutsch",
+        "be": "🇧🇾 Беларуская",
+        "uk": "🇺🇦 Українська",
+        None: "Не выбран",
+    }
+
+    await update.message.reply_text(
+        "👤 Информация о пользователе\n\n"
+        f"🆔 ID: {user_id}\n"
+        f"🌐 Язык: {language_names.get(user_data['language'], 'Неизвестно')}\n"
+        f"🔞 Возраст: {user_data['age'] or 'не указан'}\n"
+        f"📨 Ждёт ответа: {'Да' if user_data['waiting'] else 'Нет'}\n"
+        f"⚠️ Нарушений: {user_data['spam_strikes']}/3\n"
+        f"🔒 Статус: {block_status}"
+    )
 
 
 # =========================
@@ -390,7 +553,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if user.id == ADMIN_ID:
         await update.message.reply_text(
-            "👤 Mister Kian — режим администратора активен."
+            "👤 Mister Kian — режим администратора активен.\n\n"
+            "Команды:\n"
+            "/status ID — статус пользователя\n"
+            "/block ID — заблокировать\n"
+            "/unblock ID — разблокировать\n\n"
+            "Также команды работают через Reply на сообщение пользователя."
         )
         return
 
@@ -405,7 +573,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data["waiting"] = False
     user_data["spam_count"] = 0
 
-    # ВАЖНО: spam_strikes здесь НЕ обнуляем
+    # spam_strikes специально не сбрасываем
     save_data()
 
     keyboard = ReplyKeyboardMarkup(
@@ -469,7 +637,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await message.reply_text(t["age_number"])
             return
 
-        # Диапазон скрыт от пользователя
+        # Пользователь не видит допустимый диапазон
         if age < 17 or age > 65:
             await message.reply_text(t["bad_age"])
             return
@@ -481,53 +649,65 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_text(t["question"])
         return
 
-    # SPAM WHILE WAITING
+    # SPAM
     if user_data["waiting"]:
 
         user_data["spam_count"] += 1
         save_data()
 
+        # Первые 4 лишних сообщения = предупреждение
         if user_data["spam_count"] < MAX_SPAM_MESSAGES:
-            await message.reply_text(t["spam"])
+            await message.reply_text(
+                t["spam"] +
+                f"\n\n⚠️ {user_data['spam_count']}/{MAX_SPAM_MESSAGES}"
+            )
             return
 
-        # Поймали очередное нарушение
+        # Пятое лишнее сообщение = нарушение
         user_data["spam_strikes"] += 1
         user_data["spam_count"] = 0
 
         strike = user_data["spam_strikes"]
 
-        # 1 нарушение = 1 час
+        # 1 нарушение → 1 час
         if strike == 1:
-            user_data["blocked_until"] = time.time() + (60 * 60)
+            user_data["blocked_until"] = time.time() + 3600
             save_data()
 
             await message.reply_text(t["block_1h"])
 
             await context.bot.send_message(
-                ADMIN_ID,
-                f"⚠️ Антиспам: блокировка на 1 час\n\n"
-                f"👤 {user.full_name}\n"
-                f"🆔 {user.id}"
+                chat_id=ADMIN_ID,
+                text=(
+                    "⚠️ Антиспам — блокировка на 1 час\n\n"
+                    f"👤 {user.full_name}\n"
+                    f"🔗 @{user.username if user.username else 'нет username'}\n"
+                    f"🆔 {user.id}\n\n"
+                    f"🔓 /unblock {user.id}"
+                )
             )
             return
 
-        # 2 нарушение = 3 часа
+        # 2 нарушение → 3 часа
         if strike == 2:
-            user_data["blocked_until"] = time.time() + (3 * 60 * 60)
+            user_data["blocked_until"] = time.time() + 10800
             save_data()
 
             await message.reply_text(t["block_3h"])
 
             await context.bot.send_message(
-                ADMIN_ID,
-                f"⚠️ Антиспам: блокировка на 3 часа\n\n"
-                f"👤 {user.full_name}\n"
-                f"🆔 {user.id}"
+                chat_id=ADMIN_ID,
+                text=(
+                    "⚠️ Антиспам — блокировка на 3 часа\n\n"
+                    f"👤 {user.full_name}\n"
+                    f"🔗 @{user.username if user.username else 'нет username'}\n"
+                    f"🆔 {user.id}\n\n"
+                    f"🔓 /unblock {user.id}"
+                )
             )
             return
 
-        # 3 нарушение = навсегда
+        # 3 нарушение → навсегда
         user_data["permanent_block"] = True
         user_data["blocked_until"] = 0
         save_data()
@@ -535,11 +715,15 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_text(t["block_forever"])
 
         await context.bot.send_message(
-            ADMIN_ID,
-            f"🚫 ПОЛНАЯ БЛОКИРОВКА ЗА СПАМ\n\n"
-            f"👤 {user.full_name}\n"
-            f"🔗 @{user.username if user.username else 'нет username'}\n"
-            f"🆔 {user.id}"
+            chat_id=ADMIN_ID,
+            text=(
+                "🚫 ПОЛНАЯ БЛОКИРОВКА ЗА СПАМ\n\n"
+                f"👤 {user.full_name}\n"
+                f"🔗 @{user.username if user.username else 'нет username'}\n"
+                f"🆔 {user.id}\n\n"
+                f"🔓 Для снятия бана:\n"
+                f"/unblock {user.id}"
+            )
         )
         return
 
@@ -562,7 +746,8 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔗 {username}\n"
             f"🆔 {user.id}\n"
             f"🔞 Возраст: {user_data['age']}\n"
-            f"🌐 Язык: {language_names[language]}"
+            f"🌐 Язык: {language_names[language]}\n\n"
+            f"⚠️ Нарушений: {user_data['spam_strikes']}/3"
         )
 
         info_message = await context.bot.send_message(
@@ -581,6 +766,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         user_data["waiting"] = True
         user_data["spam_count"] = 0
+
         save_data()
 
         await message.reply_text(t["sent"])
@@ -604,7 +790,7 @@ async def handle_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user_id:
         await message.reply_text(
             "⚠️ Не удалось определить пользователя.\n\n"
-            "Используй Reply именно на его сообщение."
+            "Используй Reply именно на сообщение пользователя."
         )
         return
 
@@ -620,6 +806,7 @@ async def handle_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_data["waiting"] = False
         user_data["spam_count"] = 0
         user_data["stage"] = "question"
+
         save_data()
 
         language = user_data["language"] or "ru"
@@ -646,6 +833,12 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
 
+    # Админ-команды
+    app.add_handler(CommandHandler("unblock", unblock))
+    app.add_handler(CommandHandler("block", block))
+    app.add_handler(CommandHandler("status", status))
+
+    # Ответы администратора
     app.add_handler(
         MessageHandler(
             filters.User(user_id=ADMIN_ID) & ~filters.COMMAND,
@@ -653,6 +846,7 @@ def main():
         )
     )
 
+    # Сообщения пользователей
     app.add_handler(
         MessageHandler(
             ~filters.User(user_id=ADMIN_ID) & ~filters.COMMAND,
