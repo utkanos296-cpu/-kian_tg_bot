@@ -122,8 +122,6 @@ TEXTS = {
     },
 }
 
-# Консервативный список очевидных оскорблений и нецензурных слов.
-# Его можно расширять, но автоматическая проверка не безошибочна.
 OFFENSIVE_PATTERN = re.compile(
     r'(?iu)(?<!\w)(?:'
     r'бля(?:дь|ть|ха|ха\w*|ди\w*|т)|'
@@ -203,7 +201,6 @@ async def check_block(update, u):
     if until:
         u['blocked_until'] = 0
         u['spam_count'] = 0
-        # Сохраняем ожидание ответа, чтобы снятие бана не теряло вопрос.
         save_data()
     return False
 
@@ -242,7 +239,7 @@ async def testsecond(update, context):
     if update.effective_user.id != ADMIN_ID:
         return
     if not SECOND_BOT_TOKEN:
-        await update.message.reply_text('❌ Добавь SECOND_BOT_TOKEN в Railway → Variables.')
+        await update.message.reply_text('❌ Добавь SECOND_BOT_TOKEN в Render → Environment.')
         return
     try:
         async with Bot(token=SECOND_BOT_TOKEN) as other:
@@ -254,7 +251,7 @@ async def testsecond(update, context):
         )
     except Exception:
         log.exception('Second bot check failed')
-        await update.message.reply_text('❌ Проверка второго токена не удалась. Проверь Railway Variables.')
+        await update.message.reply_text('❌ Проверка второго токена не удалась. Проверь Render Environment.')
 
 
 async def unblock(update, context):
@@ -326,7 +323,6 @@ async def start(update, context):
     u = get_user(update.effective_user.id)
     if await check_block(update, u):
         return
-    # /start не позволяет обойти антиспам, пока админ не ответил.
     if u['waiting']:
         await update.message.reply_text(TEXTS.get(u['language'], TEXTS['ru'])['spam'])
         return
@@ -371,7 +367,6 @@ async def handle_user(update, context):
     if await check_block(update, u):
         return
     text = msg.text or msg.caption or ''
-    # Проверяем грубые выражения до антиспама: категории нарушений независимы.
     if text and OFFENSIVE_PATTERN.search(text):
         await handle_insult(update, context, u)
         return
@@ -464,7 +459,6 @@ async def handle_admin(update, context):
         return
     uid = data['message_owners'].get(str(msg.reply_to_message.message_id))
     if uid is None:
-        # Не выдаём ошибку на Reply к собственной фотографии/сообщению.
         return
     u = get_user(uid)
     photo = data.get('reply_photo_id') or PHOTO_FILE_ID
@@ -503,8 +497,18 @@ def main():
         app.add_handler(CommandHandler(name, handler))
     app.add_handler(MessageHandler(filters.User(user_id=ADMIN_ID) & ~filters.COMMAND, handle_admin))
     app.add_handler(MessageHandler(~filters.User(user_id=ADMIN_ID) & ~filters.COMMAND, handle_user))
-    print('Kian Assistant started...')
-    app.run_polling()
+    port = int(os.environ.get('PORT', '10000'))
+    public_url = os.environ['WEBHOOK_URL'].strip().rstrip('/')
+    if not public_url.startswith('https://'):
+        raise ValueError('WEBHOOK_URL must be a public https:// URL')
+    log.info('Kian Assistant starting on port %s', port)
+    app.run_webhook(
+        listen='0.0.0.0',
+        port=port,
+        url_path='telegram',
+        webhook_url=public_url + '/telegram',
+        drop_pending_updates=False,
+    )
 
 
 if __name__ == '__main__':
